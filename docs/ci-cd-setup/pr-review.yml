@@ -1,0 +1,64 @@
+name: PR Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for secrets in code
+        run: |
+          # Scan for common secret patterns
+          PATTERNS=(
+            'AKIA[0-9A-Z]{16}'
+            'sk-[a-zA-Z0-9]{20,}'
+            'ghp_[a-zA-Z0-9]{36}'
+            'password\s*=\s*["\''][^"\'\']+["\'']'
+          )
+          FOUND=0
+          for pattern in "${PATTERNS[@]}"; do
+            if grep -rn -E "$pattern" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.env*' src/ 2>/dev/null; then
+              echo "⚠️ Potential secret found matching pattern: $pattern"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" -eq 1 ]; then
+            echo "::warning::Potential secrets detected in code. Please review."
+          fi
+
+      - name: Check for .env files in PR
+        run: |
+          if git diff --name-only origin/main...HEAD | grep -E '^\.env'; then
+            echo "::error::.env file changes detected! Never commit .env files."
+            exit 1
+          fi
+
+      - name: Dependency audit
+        run: |
+          npm ci
+          npm audit --audit-level=high || echo "::warning::High severity vulnerabilities found"
+
+  size-check:
+    name: PR Size Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check PR size
+        run: |
+          CHANGES=$(git diff --stat origin/main...HEAD | tail -1)
+          echo "📊 PR Stats: $CHANGES"
+          FILES_CHANGED=$(git diff --name-only origin/main...HEAD | wc -l)
+          if [ "$FILES_CHANGED" -gt 30 ]; then
+            echo "::warning::Large PR with $FILES_CHANGED files changed. Consider splitting."
+          fi
